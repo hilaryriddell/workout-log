@@ -482,6 +482,9 @@ let savingState = 'idle';
 let startTime = null;
 let userDefaults = {}; // { exId: { weight, reps } }
 let settingsDay = 1; // which day tab is active in settings
+let progressData = { weight: '', chest: '', waist: '', hips: '', thighs: '' };
+let progressHistory = [];
+let progressSaving = 'idle';
 
 function loadUserDefaults() {
   try {
@@ -556,9 +559,55 @@ const DAY_TABS = {
   }
 };
 
+const PROGRESS_TAB = {
+  name: 'Progress',
+  header: ['Date', 'Weight (lbs)', 'Chest (in)', 'Waist (in)', 'Hips (in)', 'Thighs (in)']
+};
+
+async function loadProgressHistory() {
+  try {
+    const res = await fetch(`${SCRIPT_URL}?sheetId=${SHEET_ID}&sheetName=${encodeURIComponent(PROGRESS_TAB.name)}`);
+    const data = await res.json();
+    progressHistory = (data.rows || []).slice(1).reverse();
+  } catch(e) { console.error('Progress load error', e); }
+}
+
+async function saveProgress() {
+  progressSaving = 'saving';
+  render();
+  try {
+    const checkRes = await fetch(`${SCRIPT_URL}?sheetId=${SHEET_ID}&sheetName=${encodeURIComponent(PROGRESS_TAB.name)}`);
+    const checkData = await checkRes.json();
+    if (!checkData.rows || checkData.rows.length === 0) {
+      await fetch(SCRIPT_URL, {
+        method: 'POST',
+        body: JSON.stringify({ sheetId: SHEET_ID, sheetName: PROGRESS_TAB.name, row: PROGRESS_TAB.header })
+      });
+    }
+    await fetch(SCRIPT_URL, {
+      method: 'POST',
+      body: JSON.stringify({
+        sheetId: SHEET_ID,
+        sheetName: PROGRESS_TAB.name,
+        row: [today(), progressData.weight, progressData.chest, progressData.waist, progressData.hips, progressData.thighs]
+      })
+    });
+    progressSaving = 'saved';
+    progressData = { weight: '', chest: '', waist: '', hips: '', thighs: '' };
+    await loadProgressHistory();
+    render();
+    setTimeout(() => { progressSaving = 'idle'; render(); }, 3000);
+  } catch(e) {
+    console.error('Progress save error', e);
+    progressSaving = 'error';
+    render();
+    setTimeout(() => { progressSaving = 'idle'; render(); }, 3000);
+  }
+}
+
 async function loadHistory() {
   try {
-    const sheetName = DAY_TABS[1].name; // load Day 1 tab to check connectivity
+    const sheetName = DAY_TABS[1].name;
     const url = `${SCRIPT_URL}?sheetId=${SHEET_ID}&sheetName=${encodeURIComponent(sheetName)}`;
     const res = await fetch(url);
     const data = await res.json();
@@ -690,6 +739,7 @@ function render() {
     else if (screen === 'workout') app.innerHTML = renderWorkout();
     else if (screen === 'history') app.innerHTML = renderHistory();
     else if (screen === 'settings') app.innerHTML = renderSettings();
+    else if (screen === 'progress') app.innerHTML = renderProgress();
     attachEvents();
   } catch(e) {
     app.innerHTML = `<div style="padding:24px;font-family:monospace;color:#993C1D;font-size:13px;white-space:pre-wrap">Error: ${e.message}\n\n${e.stack}</div>`;
@@ -734,6 +784,7 @@ function renderHome() {
         }).join('')}
       </div>
       <button class="history-btn" data-action="showHistory">View workout history →</button>
+      <button class="history-btn" style="margin-top:8px" data-action="showProgress">Track body measurements →</button>
     </div>
   `;
 }
@@ -827,6 +878,77 @@ function renderExercise(ex, day) {
         `).join('')}
         ${!ex.isCardio && !ex.isPlank && sets.length < ex.sets + 2 ? `<button class="add-set-btn" data-action="addSet" data-ex="${ex.id}" style="color:${day.color};border-color:${day.color}40">+ Add set</button>` : ''}
       </div>
+    </div>
+  `;
+}
+
+function renderProgress() {
+  const fields = [
+    { key: 'weight', label: 'Weight', unit: 'lbs', icon: '⚖️' },
+    { key: 'chest', label: 'Chest', unit: 'in', icon: '📏' },
+    { key: 'waist', label: 'Waist', unit: 'in', icon: '📏' },
+    { key: 'hips', label: 'Hips', unit: 'in', icon: '📏' },
+    { key: 'thighs', label: 'Thighs', unit: 'in', icon: '📏' },
+  ];
+
+  const saveLabel = progressSaving === 'saving' ? 'Saving...' : progressSaving === 'saved' ? '✓ Saved to Google Sheets!' : 'Save entry';
+  const saveBg = progressSaving === 'saved' ? '#1D6E56' : progressSaving === 'error' ? '#993C1D' : '#1A1917';
+
+  return `
+    <div class="app-header">
+      <button class="back-btn" data-action="goHome">← Back</button>
+      <div class="app-title">Body Progress</div>
+      <div class="app-date">LOG YOUR MEASUREMENTS</div>
+    </div>
+    <div class="workout-content">
+
+      <div class="note-box" style="margin-bottom:20px">
+        <div class="note-box-label">Today</div>
+        <div class="note-box-text" style="font-weight:600">${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</div>
+      </div>
+
+      <div style="background:white;border:1.5px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:16px">
+        ${fields.map((f, i) => `
+          <div style="padding:14px 16px;${i < fields.length - 1 ? 'border-bottom:1px solid var(--border)' : ''}">
+            <div style="font-size:11px;font-weight:700;color:var(--soft);font-family:'DM Mono',monospace;letter-spacing:0.08em;margin-bottom:8px">${f.label.toUpperCase()}</div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <input type="number" step="0.1" placeholder="0.0" value="${progressData[f.key]}"
+                data-action="updateProgress" data-field="${f.key}"
+                style="width:100px;border:1.5px solid var(--border);border-radius:10px;padding:8px 12px;font-size:18px;font-family:'DM Mono',monospace;color:var(--dark);background:var(--bg);text-align:center">
+              <span style="font-size:14px;color:var(--soft);font-family:'DM Mono',monospace">${f.unit}</span>
+              ${progressHistory.length > 0 && progressHistory[0][fields.indexOf(f) + 1] ? `
+                <span style="font-size:12px;color:var(--soft);font-family:'DM Mono',monospace;margin-left:auto">last: ${progressHistory[0][fields.indexOf(f) + 1]} ${f.unit}</span>
+              ` : ''}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+
+      <div style="margin-bottom:16px">
+        <button class="save-btn" style="background:${saveBg}" data-action="saveProgress" ${progressSaving === 'saving' ? 'disabled' : ''}>
+          ${saveLabel}
+        </button>
+      </div>
+
+      ${progressHistory.length > 0 ? `
+        <div class="section-label" style="margin-bottom:12px">Previous entries</div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          ${progressHistory.slice(0, 10).map(row => `
+            <div style="background:white;border:1.5px solid var(--border);border-radius:14px;padding:14px 16px;border-left:4px solid var(--dark)">
+              <div style="font-family:'DM Mono',monospace;font-size:11px;color:var(--soft);margin-bottom:10px">${row[0]}</div>
+              <div style="display:flex;gap:16px;flex-wrap:wrap">
+                ${[['⚖️','lbs',1],['Chest','in',2],['Waist','in',3],['Hips','in',4],['Thighs','in',5]].map(([label, unit, idx]) =>
+                  row[idx] ? `<div style="text-align:center">
+                    <div style="font-size:16px;font-weight:700;font-family:'DM Mono',monospace;color:var(--dark)">${row[idx]}</div>
+                    <div style="font-size:10px;color:var(--soft);font-family:'DM Mono',monospace">${label} ${unit}</div>
+                  </div>` : ''
+                ).join('')}
+              </div>
+              ${row[6] ? `` : ''}
+            </div>
+          `).join('')}
+        </div>
+      ` : '<div class="status-msg">No entries yet — log your first measurements above</div>'}
     </div>
   `;
 }
@@ -987,6 +1109,8 @@ function handleClick(e) {
     render();
   }
   else if (action === 'goHome') { screen = 'home'; render(); }
+  else if (action === 'showProgress') { screen = 'progress'; render(); }
+  else if (action === 'saveProgress') { saveProgress(); }
   else if (action === 'showSettings') { screen = 'settings'; render(); }
   else if (action === 'settingsDay') { settingsDay = parseInt(el.dataset.day); render(); }
   else if (action === 'showHistory') { screen = 'history'; render(); }
@@ -1018,6 +1142,9 @@ function handleChange(e) {
   else if (action === 'updateReps') {
     workoutSets[el.dataset.ex][parseInt(el.dataset.set)].reps = el.value;
   }
+  else if (action === 'updateProgress') {
+    progressData[el.dataset.field] = el.value;
+  }
   else if (action === 'updateDefault') {
     const { ex, field } = el.dataset;
     if (!userDefaults[ex]) userDefaults[ex] = {};
@@ -1030,6 +1157,7 @@ function handleChange(e) {
 loadUserDefaults();
 render();
 loadHistory();
+loadProgressHistory();
 </script>
 </body>
 </html>
