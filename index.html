@@ -485,6 +485,7 @@ let settingsDay = 1; // which day tab is active in settings
 let progressData = { weight: '', chest: '', waist: '', hips: '', thighs: '' };
 let progressHistory = [];
 let progressSaving = 'idle';
+let stopwatches = {}; // { 'exId_setIdx': { running, startTime, elapsed, intervalId } }
 
 function loadUserDefaults() {
   try {
@@ -504,6 +505,57 @@ function getDefault(ex, field) {
     return userDefaults[ex.id][field];
   }
   return field === 'weight' ? ex.defaultWeight : ex.reps;
+}
+
+function swKey(exId, setIdx) { return `${exId}_${setIdx}`; }
+
+function swStart(exId, setIdx) {
+  const key = swKey(exId, setIdx);
+  // Stop any other running stopwatch first
+  Object.keys(stopwatches).forEach(k => { if (k !== key && stopwatches[k].running) swStop(k.split('_')[0], k.split('_')[1]); });
+  const existing = stopwatches[key] || { elapsed: 0 };
+  clearInterval(existing.intervalId);
+  stopwatches[key] = {
+    running: true,
+    startTime: Date.now() - (existing.elapsed * 1000),
+    elapsed: existing.elapsed,
+    intervalId: setInterval(() => {
+      stopwatches[key].elapsed = Math.floor((Date.now() - stopwatches[key].startTime) / 1000);
+      // Update the display without full re-render
+      const el = document.getElementById(`sw_${key}`);
+      if (el) el.textContent = formatSW(stopwatches[key].elapsed);
+    }, 100)
+  };
+  render();
+}
+
+function swStop(exId, setIdx) {
+  const key = swKey(exId, setIdx);
+  if (!stopwatches[key]) return;
+  clearInterval(stopwatches[key].intervalId);
+  stopwatches[key].running = false;
+  const elapsed = stopwatches[key].elapsed;
+  // Auto-fill into the set reps field
+  if (workoutSets[exId] && workoutSets[exId][setIdx] !== undefined) {
+    workoutSets[exId][parseInt(setIdx)].reps = String(elapsed);
+  }
+  render();
+}
+
+function swReset(exId, setIdx) {
+  const key = swKey(exId, setIdx);
+  if (stopwatches[key]) clearInterval(stopwatches[key].intervalId);
+  delete stopwatches[key];
+  if (workoutSets[exId] && workoutSets[exId][setIdx] !== undefined) {
+    workoutSets[exId][parseInt(setIdx)].reps = '';
+  }
+  render();
+}
+
+function formatSW(secs) {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return m > 0 ? `${m}:${String(s).padStart(2,'0')}` : `${s}s`;
 }
 
 function today() {
@@ -865,8 +917,24 @@ function renderExercise(ex, day) {
           <div class="set-row ${s.done ? 'done' : ''}" style="${s.done ? `--accent:${day.color};--accent-l:${day.light}` : ''}">
             <span class="set-num">${ex.isCardio ? '→' : `S${i+1}`}</span>
             ${ex.isPlank ? `
-              <input class="set-input" type="number" placeholder="sec" value="${s.reps}" data-action="updateReps" data-ex="${ex.id}" data-set="${i}" style="width:80px;${s.done ? `border-color:${day.color}30` : ''}">
-              <span class="set-label">sec</span>
+              <div style="display:flex;align-items:center;gap:8px;flex:1">
+                <span id="sw_${ex.id}_${i}" style="font-family:'DM Mono',monospace;font-size:20px;font-weight:700;color:${(() => { const sw = stopwatches[ex.id+'_'+i]; return sw && sw.running ? day.color : 'var(--dark)'; })()};min-width:52px">
+                  ${(() => { const sw = stopwatches[ex.id+'_'+i]; return sw ? formatSW(sw.elapsed) : (s.reps ? formatSW(parseInt(s.reps)) : '0s'); })()}
+                </span>
+                ${(() => {
+                  const sw = stopwatches[ex.id+'_'+i];
+                  if (sw && sw.running) {
+                    return `<button data-action="swStop" data-ex="${ex.id}" data-set="${i}" style="background:${day.color};color:white;border:none;border-radius:20px;padding:6px 14px;font-size:12px;font-weight:700;font-family:'DM Sans',sans-serif;cursor:pointer">■ Stop</button>`;
+                  } else if (sw && !sw.running && sw.elapsed > 0) {
+                    return `
+                      <button data-action="swStart" data-ex="${ex.id}" data-set="${i}" style="background:none;border:1.5px solid ${day.color};color:${day.color};border-radius:20px;padding:6px 14px;font-size:12px;font-weight:700;font-family:'DM Sans',sans-serif;cursor:pointer">▶ Resume</button>
+                      <button data-action="swReset" data-ex="${ex.id}" data-set="${i}" style="background:none;border:1.5px solid var(--border);color:var(--soft);border-radius:20px;padding:6px 10px;font-size:12px;font-weight:700;font-family:'DM Sans',sans-serif;cursor:pointer">↺</button>
+                    `;
+                  } else {
+                    return `<button data-action="swStart" data-ex="${ex.id}" data-set="${i}" style="background:${day.color};color:white;border:none;border-radius:20px;padding:6px 14px;font-size:12px;font-weight:700;font-family:'DM Sans',sans-serif;cursor:pointer">▶ Start</button>`;
+                  }
+                })()}
+              </div>
             ` : `
               <input class="set-input" type="number" placeholder="${ex.isCardio ? 'min' : 'lbs'}" value="${s.weight}" data-action="updateWeight" data-ex="${ex.id}" data-set="${i}" style="${s.done ? `border-color:${day.color}30` : ''}">
               <span class="set-label">${ex.isCardio ? 'min' : 'lbs'}</span>
@@ -1108,7 +1176,12 @@ function handleClick(e) {
     screen = 'workout';
     render();
   }
-  else if (action === 'goHome') { screen = 'home'; render(); }
+  else if (action === 'goHome') {
+    Object.values(stopwatches).forEach(sw => clearInterval(sw.intervalId));
+    stopwatches = {};
+    screen = 'home';
+    render();
+  }
   else if (action === 'showProgress') { screen = 'progress'; render(); }
   else if (action === 'saveProgress') { saveProgress(); }
   else if (action === 'showSettings') { screen = 'settings'; render(); }
@@ -1128,6 +1201,9 @@ function handleClick(e) {
       render();
     }
   }
+  else if (action === 'swStart') { swStart(el.dataset.ex, el.dataset.set); }
+  else if (action === 'swStop') { swStop(el.dataset.ex, el.dataset.set); }
+  else if (action === 'swReset') { swReset(el.dataset.ex, el.dataset.set); }
   else if (action === 'save') {
     saveToSheets(activeDay);
   }
