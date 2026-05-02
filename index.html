@@ -685,17 +685,22 @@ async function saveToSheets(dayNum) {
 // ── RENDER ─────────────────────────────────────────────────────────────────
 function render() {
   const app = document.getElementById('app');
-  if (screen === 'home') app.innerHTML = renderHome();
-  else if (screen === 'workout') app.innerHTML = renderWorkout();
-  else if (screen === 'history') app.innerHTML = renderHistory();
-  else if (screen === 'settings') app.innerHTML = renderSettings();
-  attachEvents();
+  try {
+    if (screen === 'home') app.innerHTML = renderHome();
+    else if (screen === 'workout') app.innerHTML = renderWorkout();
+    else if (screen === 'history') app.innerHTML = renderHistory();
+    else if (screen === 'settings') app.innerHTML = renderSettings();
+    attachEvents();
+  } catch(e) {
+    app.innerHTML = `<div style="padding:24px;font-family:monospace;color:#993C1D;font-size:13px;white-space:pre-wrap">Error: ${e.message}\n\n${e.stack}</div>`;
+    console.error('Render error:', e);
+  }
 }
 
 function renderHome() {
-  const todayStr = todayKey();
-  const todayEntries = history.filter(r => r[0] && r[0].includes(new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })));
-  const loggedDays = [...new Set(todayEntries.map(r => r[1]))];
+  const todayDate = today();
+  const todayEntries = history.filter(e => e.row && e.row[0] === todayDate);
+  const loggedDays = [...new Set(todayEntries.map(e => `Day ${e.dayNum}`))];
 
   return `
     <div class="app-header">
@@ -895,7 +900,7 @@ function renderSettings() {
   `;
 }
 
-
+function renderHistory() {
   // Group by date + dayNum
   const grouped = {};
   history.forEach(entry => {
